@@ -27,7 +27,11 @@ int sdFreeSpaceMode = 1; // 0 - No Check, 1 - Delete oldest dir, 2 - Upload olde
 bool formatIfMountFailed = true; // Auto format the file system if mount failed. Set to false to not auto format.
 static bool use1bitMode = true;
 #if (!CONFIG_IDF_TARGET_ESP32C3 && !CONFIG_IDF_TARGET_ESP32S2)
+#if defined(CAMERA_MODEL_M5STACK_CAMS3_UNIT)
+static int sdmmcFreq = SDMMC_FREQ_DEFAULT; // 20MHz for SD write reliability testing
+#else
 static int sdmmcFreq = BOARD_MAX_SDMMC_FREQ; // board specific default SD_MMC speed
+#endif
 #endif
 
 enum fsInd {SDMMC, LITTLEFS, SPIFFSS, FATFSS, TBD};

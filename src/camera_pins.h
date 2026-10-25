@@ -148,7 +148,8 @@
 #define PCLK_GPIO_NUM     21
 
 #elif defined(CAMERA_MODEL_M5STACK_CAMS3_UNIT)
-// supplied with PY260 camera (MEGA_CCM_PID)
+// M5Stack Unit CamS3 5MP (U174-B), PY260 camera (MEGA_CCM_PID)
+// https://docs.m5stack.com/en/unit/Unit_CamS3-5MP
 #define USE_PY260 // comment out if not using PY260
 #define CAM_BOARD "CAMERA_MODEL_M5STACK_CAMS3_UNIT"
 #define PWDN_GPIO_NUM  -1

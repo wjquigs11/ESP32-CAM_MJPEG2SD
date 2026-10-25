@@ -82,6 +82,56 @@ The ESP32 time is set from an NTP server or connected browser client.
 
 ## Installation
 
+### This checkout: M5Stack Unit CamS3 5MP (U174-B)
+
+This checkout selects `CAMERA_MODEL_M5STACK_CAMS3_UNIT` for the
+[Unit CamS3 5MP (U174-B)](https://docs.m5stack.com/en/unit/Unit_CamS3-5MP):
+PY260 5MP camera, 16MB flash, and 8MB octal PSRAM. The original U174 uses
+an OV2640 2MP camera; for that model, remove `USE_PY260` in `src/camera_pins.h`.
+
+With PlatformIO, run `pio run` to build, or
+`pio run --target upload --upload-port <port>` to flash. The included
+`platformio.ini` configures Arduino-ESP32 3.1.3, QIO flash, octal PSRAM,
+USB CDC, and a 16MB partition table with two OTA application slots.
+Use `pio device monitor --port <port>` for the 115200-baud serial log.
+If Dropbox sync interferes with build outputs, build outside the synced folder
+with `PLATFORMIO_BUILD_DIR=/tmp/esp32-cam-u174b-build pio run`. Use the same
+environment variable when running the upload command.
+
+For Arduino IDE, use these settings:
+
+| Setting | Value |
+| --- | --- |
+| Board | ESP32S3 Dev Module |
+| Arduino-ESP32 core | 3.1.3 or later |
+| Flash Size | 16MB (128Mb) |
+| Flash Mode | QIO 80MHz |
+| PSRAM | OPI PSRAM |
+| Partition Scheme | 16M Flash (3MB APP/9.9MB FATFS), or another 16MB scheme with OTA slots and at least 3MB per application |
+| USB Mode | Hardware CDC and JTAG |
+| USB CDC On Boot | Enabled |
+
+Insert a FAT32-formatted microSD card and connect through the supplied
+Grove2USB-C adapter. To enter download mode, short G0 to GND before
+powering on. Remove the jumper and restart after flashing.
+On first boot, connect to `ESP-CAM_MJPEG_...` and open `http://192.168.4.1`
+manually to configure Wi-Fi; the hotspot does not provide an automatic
+captive-portal sign-in window. The application downloads its web interface to the
+SD card after connecting to the internet.
+
+The camera, SD card (1-bit SD_MMC), LED, and PDM microphone pins are already
+defined for this board. Audio remains optional: set `INCLUDE_AUDIO` to
+`true` in `ESP32-CAM_MJPEG2SD.h` to include microphone support.
+
+PY260 controls use different register values from OV cameras. The firmware
+adapts **AGC Auto** so enabling it selects automatic gain and exposure,
+and the **Exposure** slider adjusts compensation from -3 to +3. JPEG
+quality is 0 (high), 1 (normal), or 2 (low). Old OV defaults for exposure
+and quality are corrected in memory at startup; use **Save**
+to keep the corrected values on the SD card.
+
+### General installation
+
 Download github files into the Arduino IDE sketch folder, removing `-master` from the application folder name.
 Compile with at least arduino-esp32 core v3.1.1 which contains network fixes and frame selection changes.
 Select the required ESP-CAM board by uncommenting ONE only of the `#define CAMERA_MODEL_*` in `ESP32-CAM_MJPEG2SD.h` unless using the one of the defaults:

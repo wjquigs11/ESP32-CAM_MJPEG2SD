@@ -3,6 +3,7 @@
 // s60sc 2022, 2023
 
 #include "appGlobals.h"
+#include <errno.h>
 
 #if INCLUDE_FTP_HFS
 
@@ -140,7 +141,7 @@ static bool sendFtpCommand(const char* cmd, const char* param, const char* respC
     rclient.print(cmd);
     rclient.println(param);
   }
-  LOG_VRB("Sent cmd: %s%s", cmd, param);
+  LOG_VRB("Sent cmd: %s%s", cmd, strcmp(cmd, "PASS ") == 0 ? "<redacted>" : param);
   
   // wait for ftp server response
   uint32_t start = millis();
@@ -217,15 +218,15 @@ static bool openDataPort() {
   // derive data port number
   char* p = strchr(rspBuf, '('); // skip over initial text
   int p1, p2;   
-  int items = sscanf(p, "(%*d,%*d,%*d,%*d,%d,%d)", &p1, &p2);
-  if (items != 2) {
+  int items = p ? sscanf(p, "(%*d,%*d,%*d,%*d,%d,%d)", &p1, &p2) : 0;
+  if (items != 2 || p1 < 0 || p1 > 255 || p2 < 0 || p2 > 255) {
     LOG_ERR("Failed to parse data port");
     return false;
   }
   int dataPort = (p1 << 8) + p2;
   
   // Connect to data port
-  LOG_VRB("Data port: %i", dataPort);
+  LOG_INF("FTP data connection: %s:%i", fsServer, dataPort);
   if (!dclient.connect(fsServer, dataPort)) {
     LOG_WRN("Data connection failed");   
     return false;
@@ -247,20 +248,47 @@ static bool ftpStoreFile(File &fh) {
   LOG_INF("Upload file: %s, size: %s", ftpSaveName, fmtSize(fileSize));    
 
   // open data connection
-  openDataPort();
-  uint32_t writeBytes = 0; 
+  if (!openDataPort()) return false;
+  size_t writeBytes = 0;
   uint32_t uploadStart = millis();
-  size_t readLen, writeLen;
-  if (!sendFtpCommand("STOR ", ftpSaveName, "150", "125")) return false;
+  size_t readLen;
+  percentLoaded = 0;
+  if (!sendFtpCommand("STOR ", ftpSaveName, "150", "125")) {
+    dclient.stop();
+    return false;
+  }
   do {
     // upload file in chunks
     readLen = fh.read(fsChunk, CHUNKSIZE);  
     if (readLen) {
-      writeLen = dclient.write((const uint8_t*)fsChunk, readLen);
-      writeBytes += writeLen;
-      if (writeLen == 0) {
-        LOG_WRN("Upload file to ftp failed");
-        return false;
+      size_t chunkSent = 0;
+      while (chunkSent < readLen) {
+        uint32_t writeStart = millis();
+        errno = 0;
+        size_t writeLen = dclient.write((const uint8_t*)fsChunk + chunkSent, readLen - chunkSent);
+        int writeErrno = errno; // capture before connection checks change errno
+        uint32_t writeTime = millis() - writeStart;
+        writeBytes += writeLen;
+        chunkSent += writeLen;
+        if (writeLen == 0) {
+          LOG_WRN("FTP write failed: %s, sent %u/%u bytes, chunk %u/%u",
+            ftpSaveName, (unsigned)writeBytes, (unsigned)fileSize, (unsigned)chunkSent, (unsigned)readLen);
+          LOG_WRN("Elapsed %lu ms, write %lu ms, errno %d (%s)",
+            (unsigned long)(millis() - uploadStart), (unsigned long)writeTime,
+            writeErrno, writeErrno ? strerror(writeErrno) : "no socket error reported");
+          LOG_WRN("Data connected %u, control connected %u, network connected %u, RSSI %d dBm, free heap %lu",
+            (unsigned)dclient.connected(), (unsigned)rclient.connected(),
+            (unsigned)netIsConnected(), netRSSI(), (unsigned long)ESP.getFreeHeap());
+          // The server may have sent a reason (for example 426 or 552).
+          int replyLen = rclient.available() ? rclient.read((uint8_t*)rspBuf, sizeof(rspBuf) - 1) : 0;
+          if (replyLen > 0) {
+            rspBuf[replyLen] = 0;
+            LOG_WRN("Pending FTP server reply: %s", rspBuf);
+          } else LOG_WRN("No pending FTP server reply");
+          dclient.stop();
+          sendSSE("cmd", "#P0");
+          return false;
+        }
       }
       if (calcProgress(writeBytes, fileSize, 5, percentLoaded)) {
         char pcntStr[10];
@@ -271,10 +299,15 @@ static bool ftpStoreFile(File &fh) {
     }
   } while (readLen > 0);
   dclient.stop();
-  percentLoaded = 100;
   sendSSE("cmd", "#P0");
+  if (writeBytes != fileSize) {
+    LOG_WRN("FTP source read incomplete: %s, sent %u/%u bytes",
+      ftpSaveName, (unsigned)writeBytes, (unsigned)fileSize);
+    return false;
+  }
   bool res = sendFtpCommand("", "", "226");
   if (res) {
+    percentLoaded = 100;
     LOG_ALT("Uploaded %s in %lu sec", fmtSize(writeBytes), (millis() - uploadStart) / 1000);
     //sendFtpCommand("SITE CHMOD 644 ", ftpSaveName, "200", "550"); // unix only
   } else LOG_WRN("File transfer not successful");

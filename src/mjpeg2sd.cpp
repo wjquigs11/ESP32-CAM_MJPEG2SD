@@ -7,6 +7,7 @@
 */
 
 #include "appGlobals.h"
+#include "py260.h"
 #include <charconv> // Required for std::from_chars (better atoi)
 #if INCLUDE_AF
 #if __has_include("../libraries/OV5640_Auto_Focus_for_ESP32_Camera/src/ESP32_OV5640_AF.h")
@@ -1108,7 +1109,11 @@ bool prepCam() {
   // init with high specs to pre-allocate larger buffers
   config.fb_location = CAMERA_FB_IN_PSRAM;
   config.frame_size = maxFS;
+#ifdef USE_PY260
+  config.jpeg_quality = 1; // PY260: 0 = high, 1 = normal, 2 = low
+#else
   config.jpeg_quality = 12;
+#endif
   config.fb_count = FB_CNT;
   config.sccb_i2c_port = 0;// using I2C 0. to be sure what port we are using.
 
@@ -1167,6 +1172,21 @@ bool prepCam() {
         }
         case (MEGA_CCM_PID):
           strcpy(camModel, "PY260");
+          configurePy260Sensor(s);
+          // Existing SD configurations contain OV defaults (quality 12,
+          // exposure 204). Convert only values outside the PY260 UI ranges.
+          {
+            char cameraValue[12];
+            if (retrieveConfigVal("quality", cameraValue) &&
+                (atoi(cameraValue) < 0 || atoi(cameraValue) > 2)) {
+              updateConfigVect("quality", "1");
+            }
+            if (retrieveConfigVal("aec_value", cameraValue) &&
+                (atoi(cameraValue) < -3 || atoi(cameraValue) > 3)) {
+              updateConfigVect("aec_value", "0");
+            }
+          }
+          s->set_aec2(s, 1); // warm up using automatic gain/exposure
           break;
         default:
           // not recognised

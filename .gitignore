@@ -1,0 +1,8 @@
+.pio/
+.cache/
+.vscode/
+.clangd
+compile_commands.json
+wifi_credentials.h
+frames/
+UnitCamS3-UserDemo/
