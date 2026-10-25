@@ -381,7 +381,14 @@ bool fsStartTransfer(const char* fileFolder) {
   setFolderName(fileFolder, storedPathName, sizeof(storedPathName));
   if (!uploadInProgress) {
     uploadInProgress = true;
-    if (fsHandle == NULL) xTaskCreateWithCaps(&fileServerTask, "fileServerTask", FS_STACK_SIZE, NULL, FTP_PRI, &fsHandle, STACK_MEM);    
+    // TCP connection setup requires an internal-RAM stack. xTaskCreate uses
+    // internal RAM even when the shared STACK_MEM setting selects PSRAM.
+    if (fsHandle == NULL &&
+        xTaskCreate(&fileServerTask, "fileServerTask", FS_STACK_SIZE, NULL, FTP_PRI, &fsHandle) != pdPASS) {
+      uploadInProgress = false;
+      LOG_WRN("Failed to create FTP/HTTPS upload task in internal RAM");
+      return false;
+    }
     debugMemory("fsStartTransfer");
     return true;
   } else LOG_WRN("Unable to transfer %s as another transfer in progress", storedPathName);
