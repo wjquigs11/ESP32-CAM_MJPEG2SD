@@ -164,7 +164,11 @@ static void onNetEvent(arduino_event_id_t event, arduino_event_info_t info) {
     case ARDUINO_EVENT_WIFI_STA_LOST_IP: LOG_INF("Wifi Station lost IP"); break;
     case ARDUINO_EVENT_WIFI_AP_STAIPASSIGNED: break;
     case ARDUINO_EVENT_WIFI_STA_CONNECTED: LOG_INF("WiFi Station connection to %s, using hostname: %s", ST_SSID, hostName); break;
-    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: LOG_INF("WiFi Station disconnected"); break;
+    case ARDUINO_EVENT_WIFI_STA_DISCONNECTED: {
+      wifi_err_reason_t reason = (wifi_err_reason_t)info.wifi_sta_disconnected.reason;
+      LOG_INF("WiFi Station disconnected, reason: %u %s", (unsigned)reason, WiFi.STA.disconnectReasonName(reason));
+      break;
+    }
     case ARDUINO_EVENT_WIFI_AP_STACONNECTED: LOG_INF("WiFi AP client connection"); break;
     case ARDUINO_EVENT_WIFI_AP_STADISCONNECTED: LOG_INF("WiFi AP client disconnection"); break;
     case ARDUINO_EVENT_WIFI_AP_PROBEREQRECVED: break;
@@ -233,6 +237,10 @@ static void setWifiSTA() {
     } 
   } else LOG_INF("Wifi Station IP from DHCP");
   WiFi.STA.enableIPv6(USE_IP6); 
+  // Scan all channels and pick the strongest AP for this SSID. The default fast scan
+  // joins the first matching AP found, which with a mesh / extender can be a distant one.
+  WiFi.STA.setScanMethod(WIFI_ALL_CHANNEL_SCAN);
+  WiFi.STA.setSortMethod(WIFI_CONNECT_AP_BY_SIGNAL);
   WiFi.STA.begin();
   WiFi.STA.connect(ST_SSID, ST_Pass);
   debugMemory("setWifiSTA");
@@ -336,9 +344,12 @@ static EventGroupHandle_t wifiEventGroup = NULL;
 static bool wifiEventHandlerRegistered = false;
 #define WIFI_CONNECTED_BIT BIT0
 #define WIFI_FAIL_BIT      BIT1
+#define STA_CONNECT_MS     20000 // max time to keep retrying initial STA connection
+static volatile bool inStartWifi = false; // startWifi() handles ping / mDNS itself while running
 
 // Initializes and manages Wi-Fi (STA/AP), returning true if STA connects successfully.
 static bool startWifi(bool firstcall = true) { // firstcall: true on initial invocation to apply one-time HW config.
+  inStartWifi = true;
   // Apply one-time Wi-Fi hardware configuration and suppress default behaviors.
   if (firstcall) {
     WiFi.mode(WIFI_AP_STA); // Enable concurrent Station and Access Point modes.
@@ -362,6 +373,8 @@ static bool startWifi(bool firstcall = true) { // firstcall: true on initial inv
         if (wifiEventGroup == NULL) return;
         if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
           xEventGroupSetBits(wifiEventGroup, WIFI_CONNECTED_BIT);
+          // if IP obtained after startWifi() gave up, let statusCheckTask start ping monitoring
+          if (pingHandle == NULL) runStatusCheck();
         } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
           xEventGroupSetBits(wifiEventGroup, WIFI_FAIL_BIT);
         }
@@ -378,30 +391,32 @@ static bool startWifi(bool firstcall = true) { // firstcall: true on initial inv
       xEventGroupClearBits(wifiEventGroup, WIFI_CONNECTED_BIT | WIFI_FAIL_BIT);
     }
 
+    // Let the driver retry transient failures (e.g. AUTH_EXPIRE on a weak signal) while
+    // waiting for the initial connection. There is no later retry if the gateway was
+    // never reached, so a single early disconnect must not end the attempt.
+    WiFi.STA.setAutoReconnect(true);
     setWifiSTA(); // Apply Station configuration (SSID/password).
     wlStat = WL_NO_SSID_AVAIL; // Reset status; reconnection is deferred to background ping task.
     
-    // Poll connection status with a 5-second timeout to prevent indefinite blocking.
+    // Wait for an IP until timeout, ignoring intermediate disconnects.
     if (strlen(ST_SSID) > 0) {
       if (wifiEventGroup != NULL) {
         EventBits_t bits = 0;
         uint32_t startAttemptTime = millis();
-        // Wait for connection or failure with a 100ms loop to preserve progress logging.
-        while (!(bits & (WIFI_CONNECTED_BIT | WIFI_FAIL_BIT)) && (millis() - startAttemptTime < 5000)) {
+        while (!(bits & WIFI_CONNECTED_BIT) && (millis() - startAttemptTime < STA_CONNECT_MS)) {
           bits = xEventGroupWaitBits(
             wifiEventGroup,
-            WIFI_CONNECTED_BIT | WIFI_FAIL_BIT,
+            WIFI_CONNECTED_BIT,
             pdFALSE, // Do not clear bits on exit
             pdFALSE, // Wait for any bit
             pdMS_TO_TICKS(100)
           );
-          if (!(bits & (WIFI_CONNECTED_BIT | WIFI_FAIL_BIT))) {
-            LOG_SEND(".");
-          }
+          if (!(bits & WIFI_CONNECTED_BIT)) LOG_SEND(".");
         }
         
         if (bits & WIFI_CONNECTED_BIT) {
           wlStat = WL_CONNECTED;
+          WiFi.STA.setAutoReconnect(false); // connection now managed by ping task
         } else {
           wlStat = WiFi.STA.status(); // Get exact status if failed or timeout
         }
@@ -458,9 +473,12 @@ static bool startWifi(bool firstcall = true) { // firstcall: true on initial inv
         scanEventRegistered = true;
       }
 
-      // Initiate non-blocking background Wi-Fi scan.
-      if (WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
-          // Do not start another scan.
+      // Initiate non-blocking background Wi-Fi scan, only if SSID not found.
+      // Otherwise leave the driver auto reconnecting in the background, as the
+      // scan needs a disconnect which aborts an association still awaiting DHCP.
+      // statusCheckTask starts ping monitoring once an IP is eventually obtained.
+      if (wlStat != WL_NO_SSID_AVAIL || WiFi.scanComplete() == WIFI_SCAN_RUNNING) {
+          // Do not start a scan.
       } else {
           // Clear the STA connecting state to allow scanning.
           WiFi.disconnect(false);
@@ -496,6 +514,9 @@ static bool startWifi(bool firstcall = true) { // firstcall: true on initial inv
   if (pingHandle == NULL) {
     startPing();
   }
+  inStartWifi = false;
+  // if IP arrived after the wait loop timed out, but before inStartWifi cleared
+  if (netMode == 0 && pingHandle == NULL && WiFi.STA.status() == WL_CONNECTED) runStatusCheck();
   
   // Return true only if Station mode achieved a connected state.
   return wlStat == WL_CONNECTED;
@@ -967,6 +988,15 @@ static void statusCheckTask(void* parameter) {
   while (true) {
     // regular status checks
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    if (netMode == 0 && !inStartWifi && pingHandle == NULL && WiFi.STA.status() == WL_CONNECTED) {
+      // STA connected after startWifi() timed out, so start deferred services
+      LOG_INF("Wifi Station connected late, starting monitoring");
+      WiFi.STA.setAutoReconnect(false); // connection now managed by ping task
+#if CONFIG_IDF_TARGET_ESP32S3
+      setupMdnsHost();
+#endif
+      startPing();
+    }
     if (!dataFilesChecked) checkDataFiles();
     if (appSetupDone) doAppPing(timeSynchronized);
     checkScheduledRestart();

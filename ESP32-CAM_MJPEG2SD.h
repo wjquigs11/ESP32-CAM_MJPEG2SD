@@ -30,6 +30,11 @@
 
 // User's ESP32S3 cam board
 #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+#if defined(ARDUINO_XIAO_ESP32S3)
+// Seeed XIAO ESP32S3 Sense (8MB flash / 8MB PSRAM), selected automatically
+// by the PlatformIO env xiao-esp32s3-sense (board seeed_xiao_esp32s3)
+#define CAMERA_MODEL_XIAO_ESP32S3
+#else
 //#define CAMERA_MODEL_ESP32_S3_CAM
 //#define CAMERA_MODEL_FREENOVE_ESP32S3_CAM
 //#define CAMERA_MODEL_XIAO_ESP32S3
@@ -43,6 +48,7 @@
 //#define CAMERA_MODEL_Waveshare_ESP32_S3_ETH
 //#define CAMERA_MODEL_DFRobot_ESP32_S3_AI_CAM
 //#define AUXILIARY
+#endif // ARDUINO_XIAO_ESP32S3
 
 #endif
 
@@ -52,7 +58,7 @@
 ***************************************************************/
 #define INCLUDE_FTP_HFS true // ftp.cpp (file upload)
 #define INCLUDE_TGRAM false   // telegram.cpp (Telegram app interface)
-#define INCLUDE_AUDIO false   // audio.cpp (microphones & speakers)
+#define INCLUDE_AUDIO true    // audio.cpp (microphones & speakers)
 #define INCLUDE_PERIPH false  // peripherals.cpp (servos, PIR, led etc)
 #define INCLUDE_SMTP false    // smtp.cpp (email)
 #define INCLUDE_MQTT false    // mqtt.cpp (MQTT)

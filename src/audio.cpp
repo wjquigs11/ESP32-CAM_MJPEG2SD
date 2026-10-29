@@ -131,8 +131,14 @@ static bool setupMic() {
   } else {
     // PDM mic needs separate channel to I2S
     I2Spdm.setPinsPdmRx(micSWsPin, micSdPin);
+    // show all IDF driver errors (i2s, gdma, intr_alloc) during setup, normally suppressed when DBG_ON false
+    if (!DBG_ON) esp_log_level_set("*", ESP_LOG_ERROR);
     res = I2Spdm.begin(I2S_MODE_PDM_RX, SAMPLE_RATE, I2S_DATA_BIT_WIDTH_16BIT, I2S_SLOT_MODE_MONO, I2S_STD_SLOT_LEFT);
+    if (!DBG_ON) esp_log_level_set("*", ESP_LOG_NONE);
   }
+  if (!res) LOG_WRN("%s mic setup failed: SCK %d, WS/CLK %d, SD/DAT %d, rate %lu, core %d, internal free %u, DMA block %u", 
+    micLabels[I2Smic], micSckPin, micSWsPin, micSdPin, (unsigned long)SAMPLE_RATE, xPortGetCoreID(),
+    heap_caps_get_free_size(MALLOC_CAP_INTERNAL), heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
   return res;
 }
 
